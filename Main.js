@@ -13,7 +13,7 @@ const handlers = {
   //   cleanup: require("./handlers/cleanup"),
 };
 
-const sqs = new SQSClient({ region: "eu-north-1" });
+const sqs = new SQSClient({ region: "us-east-1" });
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const WORKER_TYPE = process.env.WORKER_TYPE;
 
