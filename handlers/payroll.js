@@ -3,7 +3,7 @@ const path = require("path");
 const os = require("os");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
-const s3 = new S3Client({ region: "eu-north-1" });
+const s3 = new S3Client({ region: "ap-south-1" });
 const BUCKET = process.env.S3_BUCKET;
 
 module.exports = async function handlePayrollCsv(jobId, pool) {

@@ -13,7 +13,7 @@ const handlers = {
   //   cleanup: require("./handlers/cleanup"),
 };
 
-const sqs = new SQSClient({ region: "us-east-1" });
+const sqs = new SQSClient({ region: "eu-north-1" });
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const WORKER_TYPE = process.env.WORKER_TYPE;
 
@@ -35,7 +35,7 @@ async function dbPool() {
 }
 
 async function run() {
-  const pool = await dbPool();
+  //const pool = await dbPool();
   console.log(`🚀 Worker started for type: ${WORKER_TYPE}`);
 
   while (true) {
@@ -54,7 +54,16 @@ async function run() {
       const body = JSON.parse(m.Body);
       console.log(body);
       if (body.report_type !== WORKER_TYPE) continue; // filter by type
-
+      const dbInfo = body.db;
+      
+      const pool = await mysql.createPool({
+        host: dbInfo.host,
+        user: dbInfo.username,
+        password: dbInfo.password,
+        database: dbInfo.database,
+        waitForConnections: true,
+        connectionLimit: 3,
+      });
       try {
         await pool.query(
           "UPDATE report_jobs SET status='processing' WHERE id=?",
