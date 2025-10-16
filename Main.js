@@ -22,17 +22,17 @@ if (!handlers[WORKER_TYPE]) {
   process.exit(1);
 }
 
-async function dbPool() {
-  return mysql.createPool({
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || "3309"),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS ?? "",
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 5,
-  });
-}
+// async function dbPool() {
+//   return mysql.createPool({
+//     host: process.env.DB_HOST,
+//     port: parseInt(process.env.DB_PORT || "3309"),
+//     user: process.env.DB_USER,
+//     password: process.env.DB_PASS ?? "",
+//     database: process.env.DB_NAME,
+//     waitForConnections: true,
+//     connectionLimit: 5,
+//   });
+// }
 
 async function run() {
   //const pool = await dbPool();
