@@ -12,15 +12,23 @@ module.exports = async function handleTransactionsCsv(jobId, pool) {
     "SELECT params FROM report_jobs WHERE id = ?",
     [jobId]
   );
-  const params = rows[0] ? JSON.parse(rows[0].params) : {};
+  let params = rows[0]?.params ?? {};
+  if (typeof params === "string") {
+    try {
+      params = JSON.parse(params);
+    } catch (err) {
+      console.error("Failed to parse params JSON:", err);
+    }
+  }
+
   const [headers, values] = params.columnNames
     .split("$")
     .map((p) => p.split(","));
-  console.log("headers", headers);
-  console.log("values", values);
+  // console.log("headers", headers);
+  // console.log("values", values);
 
   const [data] = await pool.query(params.query);
-  console.log(data);
+  //console.log(data);
   const csvLines = [];
   csvLines.push(headers.join(","));
 

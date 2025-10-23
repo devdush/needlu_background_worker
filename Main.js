@@ -60,10 +60,12 @@ async function run() {
         host: dbInfo.host,
         user: dbInfo.username,
         password: dbInfo.password,
-        database: dbInfo.database,
+        database: dbInfo.database, 
         waitForConnections: true,
         connectionLimit: 3,
       });
+      // console.log(`Connected to database at ${dbInfo.host} for job ${body.job_id}`);
+      // console.log(pool)
       try {
         await pool.query(
           "UPDATE report_jobs SET status='processing' WHERE id=?",
