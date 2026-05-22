@@ -24,10 +24,11 @@ module.exports = async function handleTransactionsCsv(jobId, pool) {
   const [headers, values] = params.columnNames
     .split("$")
     .map((p) => p.split(","));
-  // console.log("headers", headers);
+   console.log("headers", headers);
   // console.log("values", values);
 
   const [data] = await pool.query(params.query);
+  //console.log(headers);
   //console.log(data);
   const csvLines = [];
   csvLines.push(headers.join(","));
