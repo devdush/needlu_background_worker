@@ -120,7 +120,8 @@ async function importCSVFromS3({
     sessionUser,
     staging_table,
     pool,
-    validation
+    validation,
+    errorDetails
 }) {
 
     const ExcelJS = require("exceljs");
@@ -279,17 +280,28 @@ async function importCSVFromS3({
                 normalizeCell(row[index]);
 
             if (validationRules[column]) {
+                // console.log("-----------Berore funtion----------------------");
+                //     console.log(column, value);
+                //     console.log("---------------------------------");
+                //     console.log("---------------------------------");
                 const result =
                     applyRule(
                         validationRules[column].rule,
                         value,
                         validationRules[column].message
                     );
+                    // console.log("-----------After funtion----------------------");
+                    // console.log(result, column, value);
+                    // console.log("---------------------------------");
+                    // console.log("---------------------------------");
+
                 if (!result.status) {
                     errorDetails.push(
                         `Line ${rowNumber}: ${column} - ${result.message}`
                     );
                     rowHasError = true;
+                    console.log("---------------In error validation------------------");
+                    console.log(errorDetails, column, value);
                     return;
                 }
                 value = result.value;
@@ -440,6 +452,8 @@ async function getOptionsInfo(fieldsArr, entity, pool) {
 }
 async function formSubmit() { }
 module.exports = async function handleCSVUpload(jobId, pool) {
+    const errorDetails = [];
+    const allErrors = [];
     //console.log(jobId);
     const [rows] = await pool.query(
         "SELECT params FROM report_jobs WHERE id = ?",
@@ -488,7 +502,7 @@ module.exports = async function handleCSVUpload(jobId, pool) {
         await createStagingTable(mainTable, pool);
     }
 
-    const allErrors = [];
+    
 
     try {
         await importCSVFromS3({
@@ -499,41 +513,77 @@ module.exports = async function handleCSVUpload(jobId, pool) {
             sessionUser,
             staging_table,
             pool,
-            validation
+            validation,
+            errorDetails
         });
+    // } catch (err) {
+    //     const errorMessage = err.message;
+
+    //     // Delete staging data for this batch
+    //     await pool.query(
+    //         `DELETE FROM \`${staging_table}\` WHERE batch_id = ?`,
+    //         [batchId]
+    //     );
+
+
+    //     // Update job error
+    //     await pool.query(
+    //         `
+    //       UPDATE report_jobs 
+    //       SET 
+    //         status='failed',
+    //         error=?,
+    //         notification_status='unread'
+    //       WHERE id=?
+    //       `,
+    //         [
+    //             errorMessage,
+    //             jobId
+    //         ]
+    //     );
+
+
+    //     return {
+    //         code: "failed",
+    //         message: "Validation failed. Please fix errors.",
+    //         form_results: errorMessage
+    //     };
+    // }
     } catch (err) {
-        const errorMessage = err.message;
 
-        // Delete staging data for this batch
-        await pool.query(
-            `DELETE FROM \`${staging_table}\` WHERE batch_id = ?`,
-            [batchId]
-        );
+    console.error(err);
 
+    let errMessage = err.message;
 
-        // Update job error
-        await pool.query(
-            `
-          UPDATE report_jobs 
-          SET 
-            status='failed',
-            error=?,
-            notification_status='unread'
-          WHERE id=?
-          `,
-            [
-                errorMessage,
-                jobId
-            ]
-        );
+    // Duplicate entry error
+    if (err.code === "ER_DUP_ENTRY") {
 
+        const match = err.sqlMessage?.match(/Duplicate entry '(.+?)' for key/);
 
-        return {
-            code: "failed",
-            message: "Validation failed. Please fix errors.",
-            form_results: errorMessage
-        };
+        const duplicateValue = match ? match[1] : "";
+
+        errMessage = duplicateValue
+            ? `Duplicate entry '${duplicateValue}'`
+            : "Duplicate record found";
     }
+
+    errorDetails.push(
+        `Line ${row.row_number}: ${errMessage}`
+    );
+
+    // Mark staging row as failed
+    await pool.query(
+        `
+        UPDATE \`${staging_table}\`
+        SET
+            \`import_status\` = 'failed',
+            \`validation_error\` = ?
+        WHERE \`batch_id\` = ?
+          AND \`row_number\` = ?
+        `,
+        [errMessage, batchId, row.row_number]
+    );
+}
     const optionsInfo = await getOptionsInfo(fields, entity, pool);
 
     for (const fld in optionsInfo) {
@@ -642,58 +692,130 @@ module.exports = async function handleCSVUpload(jobId, pool) {
             await pool.query(sql, insertVals);
 
             // Mark staging row as completed
-            await pool.query(
-                `
-      UPDATE \`${staging_table}\`
-      SET import_status = 'completed'
-      WHERE batch_id = ? AND row_number = ?
-      `,
-                [batchId, row.row_number],
-            );
+    //         await pool.query(
+    //             `
+    //   UPDATE \`${staging_table}\`
+    //   SET import_status = 'completed'
+    //   WHERE batch_id = ? AND row_number = ?
+    //   `,
+    //             [batchId, row.row_number],
+    //         );
+
+    const updateSql = `
+UPDATE \`${staging_table}\`
+SET \`import_status\` = 'completed'
+WHERE \`batch_id\` = ? AND \`row_number\` = ?
+`;
+
+await pool.query(updateSql, [batchId, row.row_number]);
+
+
 
             successCount++;
-        } catch (err) {
-            console.error(err);
+        } 
+    //     catch (err) {
+    //         console.error(err);
 
-            let errMessage = err.message;
+    //         let errMessage = err.message;
 
-            // Duplicate entry error
-            if (err.code === "ER_DUP_ENTRY") {
-                errMessage = "Duplicate record found";
-            }
+    //         // Duplicate entry error
+    //         if (err.code === "ER_DUP_ENTRY") {
+    //             errMessage = "Duplicate record found";
+    //         }
 
-            errorDetails.push(`Line ${row.row_number}: Failed. (${errMessage})`);
+    //         errorDetails.push(`Line ${row.row_number}: Failed. (${errMessage})`);
 
-            // Mark staging row as failed
-            await pool.query(
-                `
-      UPDATE \`${staging_table}\`
-      SET
-        import_status = 'failed',
-        validation_error = ?
-      WHERE batch_id = ? AND row_number = ?
-      `,
-                [errMessage, batchId, row.row_number],
-            );
-        }
+    //         // Mark staging row as failed
+    //         await pool.query(
+    //             `
+    //   UPDATE \`${staging_table}\`
+    //   SET
+    //     import_status = 'failed',
+    //     validation_error = ?
+    //   WHERE batch_id = ? AND row_number = ?
+    //   `,
+    //             [errMessage, batchId, row.row_number],
+    //         );
+    //     }
+     catch (err) {
+
+    console.error(err);
+
+    let errMessage = err.message;
+
+    if (err.code === "ER_DUP_ENTRY") {
+
+        const match = err.sqlMessage?.match(
+            /Duplicate entry '(.+?)' for key/
+        );
+
+        const duplicateValue = match ? match[1] : "";
+
+        errMessage = duplicateValue
+            ? `Duplicate entry '${duplicateValue}'`
+            : "Duplicate record found";
+    }
+
+    errorDetails.push(
+        `Line ${row.row_number}: ${errMessage}`
+    );
+
+    await pool.query(
+        `
+        UPDATE \`${staging_table}\`
+        SET
+            \`import_status\` = 'failed',
+            \`validation_error\` = ?
+        WHERE \`batch_id\` = ?
+          AND \`row_number\` = ?
+        `,
+        [
+            errMessage,
+            batchId,
+            row.row_number
+        ]
+    );
+}
     }
 
     // ---------------------------
     // 8. FINAL RESPONSE
     // ---------------------------
 
+    // if (errorDetails.length > 0) {
+    //     await pool.query(
+    //         "UPDATE report_jobs SET status='failed',error=?, notification_status='unread' WHERE id=?",
+    //         [
+    //             errorDetails.join("\n"),
+    //             jobId
+    //         ],
+    //     );
+    //     return {
+    //         code: "partial_success",
+    //         message: `${successCount} rows imported, ${errorDetails.length} failed.`,
+    //         errors: errorDetails,
+    //     };
+    // }
     if (errorDetails.length > 0) {
+
+        const errorMessage = errorDetails.join("\n");
+        
         await pool.query(
-            "UPDATE report_jobs SET status='failed',error=?, notification_status='unread' WHERE id=?",
-            [
-                errorDetails.join("\n"),
-                jobId
-            ],
+            `
+            UPDATE report_jobs
+            SET
+                status = 'failed',
+                error = ?,
+                notification_status = 'unread'
+            WHERE id = ?
+            `,
+            [errorMessage, jobId]
         );
+    
         return {
-            code: "partial_success",
-            message: `${successCount} rows imported, ${errorDetails.length} failed.`,
-            errors: errorDetails,
+            code: "failed",
+            message: "Validation failed. Please fix errors.",
+            form_results: errorMessage
         };
     }
 
@@ -713,13 +835,110 @@ module.exports = async function handleCSVUpload(jobId, pool) {
     }
 };
 
+// function applyRule(rule, value, message) {
+//     switch (rule) {
+//         case "upperCase":
+//             return {
+//                 status: true,
+//                 value: String(value).toUpperCase()
+//             };
+
+//         case "lowerCase":
+//             return {
+//                 status: true,
+//                 value: String(value).toLowerCase()
+//             };
+
+//         case "emailValidation":
+//             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+//             if (!emailRegex.test(String(value))) {
+//                 return {
+//                     status: false,
+//                     message
+//                 };
+//             }
+
+//             return {
+//                 status: true,
+//                 value
+//             };
+
+//         case "phoneValidation":
+//             const phone = String(value).replace(/[\s\-()]/g, "");
+
+//             if (!/^0\d{9}$/.test(phone)) {
+//                 return {
+//                     status: false,
+//                     message
+//                 };
+//             }
+
+//             return {
+//                 status: true,
+//                 value: phone
+//             };
+//         case "dateValidation": {
+//             let val = String(value).trim();
+
+//             // Convert ISO datetime to YYYY-MM-DD
+//             if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
+//                 val = val.split("T")[0];
+//             }
+
+//             let date = null;
+
+//             // YYYY-MM-DD
+//             if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+//                 date = new Date(val);
+//             }
+//             // YYYY/MM/DD
+//             else if (/^\d{4}\/\d{2}\/\d{2}$/.test(val)) {
+//                 const [y, m, d] = val.split("/");
+//                 date = new Date(`${y}-${m}-${d}`);
+//             }
+//             // MM/DD/YYYY or DD/MM/YYYY
+//             else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
+//                 const [a, b, c] = val.split("/").map(Number);
+
+//                 if (a > 12) {
+//                     date = new Date(c, b - 1, a);
+//                 } else {
+//                     date = new Date(c, a - 1, b);
+//                 }
+//             }
+
+//             if (date && !isNaN(date.getTime())) {
+//                 return {
+//                     status: true,
+//                     value: val
+//                 };
+//             }
+
+//             return {
+//                 status: false,
+//                 message
+//             };
+//         }
+
+//         default:
+//             return {
+//                 status: true,
+//                 value
+//             };
+//     }
+// }
+
 function applyRule(rule, value, message) {
+
     switch (rule) {
+
         case "upperCase":
             return {
                 status: true,
                 value: String(value).toUpperCase()
             };
+
 
         case "lowerCase":
             return {
@@ -727,7 +946,8 @@ function applyRule(rule, value, message) {
                 value: String(value).toLowerCase()
             };
 
-        case "emailValidation":
+
+        case "emailValidation": {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
             if (!emailRegex.test(String(value))) {
@@ -741,8 +961,10 @@ function applyRule(rule, value, message) {
                 status: true,
                 value
             };
+        }
 
-        case "phoneValidation":
+
+        case "phoneValidation": {
             const phone = String(value).replace(/[\s\-()]/g, "");
 
             if (!/^0\d{9}$/.test(phone)) {
@@ -756,48 +978,193 @@ function applyRule(rule, value, message) {
                 status: true,
                 value: phone
             };
-        case "dateValidation": {
-            let val = String(value).trim();
+        }
 
-            // Convert ISO datetime to YYYY-MM-DD
+
+        // case "dateValidation": {
+        //     let val = String(value).trim();
+        //     let date = null;
+
+        //     // Convert ISO datetime to YYYY-MM-DD
+        //     if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
+        //         val = val.split("T")[0];
+        //     }
+
+
+        //     // YYYY-MM-DD
+        //     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+
+        //         date = new Date(val);
+
+        //     }
+
+        //     // YYYY/MM/DD
+        //     else if (/^\d{4}\/\d{2}\/\d{2}$/.test(val)) {
+
+        //         const [y, m, d] = val.split("/");
+        //         date = new Date(`${y}-${m}-${d}`);
+
+        //     }
+
+        //     // MM/DD/YYYY or DD/MM/YYYY
+        //     else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
+
+        //         const [a, b, c] = val.split("/").map(Number);
+
+        //         if (a > 12) {
+        //             // DD/MM/YYYY
+        //             date = new Date(c, b - 1, a);
+        //         } else {
+        //             // MM/DD/YYYY
+        //             date = new Date(c, a - 1, b);
+        //         }
+        //     }
+
+
+        //     if (date && !isNaN(date.getTime())) {
+
+        //         return {
+        //             status: true,
+        //             value: val
+        //         };
+
+        //     }
+
+
+        //     return {
+        //         status: false,
+        //         message
+        //     };
+        // }
+        case "dateValidation": {
+                
+            let val = String(value).trim();
+            let date = null;
+                
+            // Convert ISO datetime
             if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
                 val = val.split("T")[0];
             }
-
-            let date = null;
-
-            // YYYY-MM-DD
-            if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-                date = new Date(val);
-            }
-            // YYYY/MM/DD
-            else if (/^\d{4}\/\d{2}\/\d{2}$/.test(val)) {
-                const [y, m, d] = val.split("/");
-                date = new Date(`${y}-${m}-${d}`);
-            }
-            // MM/DD/YYYY or DD/MM/YYYY
-            else if (/^\d{2}\/\d{2}\/\d{4}$/.test(val)) {
-                const [a, b, c] = val.split("/").map(Number);
-
-                if (a > 12) {
-                    date = new Date(c, b - 1, a);
-                } else {
-                    date = new Date(c, a - 1, b);
+        
+        
+            // YYYY-MM-DD or YYYY/MM/DD
+            let match = val.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+        
+            if (match) {
+            
+                let year = Number(match[1]);
+                let month = Number(match[2]);
+                let day = Number(match[3]);
+            
+                date = new Date(year, month - 1, day);
+            
+                // Validate real date
+                if (
+                    date.getFullYear() !== year ||
+                    date.getMonth() !== month - 1 ||
+                    date.getDate() !== day
+                ) {
+                    date = null;
                 }
             }
-
+        
+        
+            // MM-DD-YYYY or MM/DD/YYYY
+            if (!date) {
+            
+                match = val.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+            
+                if (match) {
+                
+                    let month = Number(match[1]);
+                    let day = Number(match[2]);
+                    let year = Number(match[3]);
+                
+                    // Month cannot be greater than 12
+                    if (month <= 12) {
+                    
+                        date = new Date(year, month - 1, day);
+                    
+                        // Validate real date
+                        if (
+                            date.getFullYear() !== year ||
+                            date.getMonth() !== month - 1 ||
+                            date.getDate() !== day
+                        ) {
+                            date = null;
+                        }
+                    }
+                }
+            }
+        
+        
             if (date && !isNaN(date.getTime())) {
+            
                 return {
                     status: true,
-                    value: val
+                    value: date.toISOString().split("T")[0]
                 };
+            
             }
-
+        
+        
             return {
                 status: false,
                 message
             };
         }
+
+
+        case "replace": {
+
+            /*
+                Rule format:
+                replace(find)(replace)
+
+                Examples:
+                replace(,)('')
+                replace(,)( )
+                replace(-)(/)
+            */
+
+            const replaceRegex = /^replace\((.*?)\)\((.*?)\)$/;
+            const match = String(rule).match(replaceRegex);
+
+
+            if (!match) {
+
+                return {
+                    status: false,
+                    message: "Invalid replace rule format"
+                };
+
+            }
+
+
+            let find = match[1];
+            let replace = match[2];
+
+
+            // Remove quote wrappers
+            if (
+                (replace.startsWith("'") && replace.endsWith("'")) ||
+                (replace.startsWith('"') && replace.endsWith('"'))
+            ) {
+
+                replace = replace.substring(1, replace.length - 1);
+
+            }
+
+
+            const newValue = String(value).replaceAll(find, replace);
+
+
+            return {
+                status: true,
+                value: newValue
+            };
+        }
+
 
         default:
             return {

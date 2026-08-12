@@ -23,20 +23,20 @@ if (!handlers[WORKER_TYPE]) {
   process.exit(1);
 }
 
-async function dbPool() {
-  return mysql.createPool({
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || "3306"),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS ?? "",
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 5,
-  });
-}
+// async function dbPool() {
+//   return mysql.createPool({
+//     host: process.env.DB_HOST,
+//     port: parseInt(process.env.DB_PORT || "3306"),
+//     user: process.env.DB_USER,
+//     password: process.env.DB_PASS ?? "",
+//     database: process.env.DB_NAME,
+//     waitForConnections: true,
+//     connectionLimit: 5,
+//   });
+// }
 
 async function run() {
-  const pool = await dbPool();
+  //const pool = await dbPool();
   console.log(`🚀 Worker started for type: ${WORKER_TYPE}`);
 
   while (true) {
@@ -54,16 +54,16 @@ async function run() {
     for (const m of res.Messages) {
       const body = JSON.parse(m.Body);
       if (body.report_type !== WORKER_TYPE) continue; // filter by type
-    //  const dbInfo = body.db;
+     const dbInfo = body.db;
       
-      // const pool = await mysql.createPool({
-      //   host: dbInfo.host, 
-      //   user: dbInfo.username,
-      //   password: dbInfo.password,
-      //   database: dbInfo.database, 
-      //   waitForConnections: true,
-      //   connectionLimit: 3,
-      // });
+      const pool = await mysql.createPool({
+        host: dbInfo.host, 
+        user: dbInfo.username,
+        password: dbInfo.password,
+        database: dbInfo.database, 
+        waitForConnections: true,
+        connectionLimit: 3,
+      });
       // console.log(`Connected to database at ${dbInfo.host} for job ${body.job_id}`);
       // console.log(pool)
       try {
