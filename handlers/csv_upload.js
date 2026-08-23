@@ -278,35 +278,31 @@ async function importCSVFromS3({
 
             let value =
                 normalizeCell(row[index]);
-
-            if (validationRules[column]) {
-                // console.log("-----------Berore funtion----------------------");
-                //     console.log(column, value);
-                //     console.log("---------------------------------");
-                //     console.log("---------------------------------");
-                const result =
-                    applyRule(
+                if (validationRules[column] && 
+                    value !== null && 
+                    value !== undefined && 
+                    value !== '') {
+                    const result = applyRule(
                         validationRules[column].rule,
                         value,
                         validationRules[column].message
                     );
-                    // console.log("-----------After funtion----------------------");
-                    // console.log(result, column, value);
-                    // console.log("---------------------------------");
-                    // console.log("---------------------------------");
-
-                if (!result.status) {
-                    errorDetails.push(
-                        `Line ${rowNumber}: ${column} - ${result.message}`
-                    );
-                    rowHasError = true;
-                    console.log("---------------In error validation------------------");
-                    console.log(errorDetails, column, value);
-                    return;
+                
+                    if (!result.status) {
+                        errorDetails.push(
+                            `Line ${rowNumber}: ${column} - ${result.message}`
+                        );
+                    
+                        rowHasError = true;
+                    
+                        console.log("---------------In error validation------------------");
+                        console.log(errorDetails, column, value);
+                    
+                        return;
+                    }
+                
+                    value = result.value;
                 }
-                value = result.value;
-
-            }
             values.push(value);
 
         });
@@ -516,39 +512,6 @@ module.exports = async function handleCSVUpload(jobId, pool) {
             validation,
             errorDetails
         });
-    // } catch (err) {
-    //     const errorMessage = err.message;
-
-    //     // Delete staging data for this batch
-    //     await pool.query(
-    //         `DELETE FROM \`${staging_table}\` WHERE batch_id = ?`,
-    //         [batchId]
-    //     );
-
-
-    //     // Update job error
-    //     await pool.query(
-    //         `
-    //       UPDATE report_jobs 
-    //       SET 
-    //         status='failed',
-    //         error=?,
-    //         notification_status='unread'
-    //       WHERE id=?
-    //       `,
-    //         [
-    //             errorMessage,
-    //             jobId
-    //         ]
-    //     );
-
-
-    //     return {
-    //         code: "failed",
-    //         message: "Validation failed. Please fix errors.",
-    //         form_results: errorMessage
-    //     };
-    // }
     } catch (err) {
 
     console.error(err);
@@ -625,12 +588,6 @@ module.exports = async function handleCSVUpload(jobId, pool) {
             AND p.\`${parentCol}\` IS NULL
             `;
         const [rows] = await pool.query(sql, [...params, batchId]);
-
-        for (const r of rows) {
-            allErrors.push(
-                `Line ${r.row_number}: Invalid value '${r[childCol]}' for ${info.toField}`,
-            );
-        }
     }
 
     // ---------------------------
@@ -668,134 +625,309 @@ module.exports = async function handleCSVUpload(jobId, pool) {
         `SELECT * FROM \`${staging_table}\` WHERE batch_id = ?`,
         [batchId],
     );
+    // ---------------------------------------------------------
+    // 1. Get key_member fields
+    // ---------------------------------------------------------
+    const [keyFieldRows] = await pool.query(
+        `
+        SELECT ID AS field_id
+        FROM erp.data_item
+        WHERE form_ID = ?
+          AND key_member = 1
+        ORDER BY sorting_value
+        `,
+        [form]
+    );
+
+    const keyColumns = keyFieldRows.map(
+        item => `c${item.field_id}`
+    );
+
+
+
+    // ---------------------------------------------------------
+    // 2. FIRST LOOP - CHECK ALL DUPLICATES
+    // ---------------------------------------------------------
+
+    let hasDuplicate = false;
 
     for (const row of stagingRows) {
+
         try {
-            const insertCols = ["entity", "user"];
-            const insertVals = [row.entity, row.user];
 
-            // Dynamic columns from CSV fields
-            fields.forEach((fld) => {
-                const colName = `c${fld}`;
+            if (keyColumns.length === 0) {
+                continue;
+            }
 
-                insertCols.push(colName);
-                insertVals.push(row[colName]);
+            const duplicateConditions = [];
+            const duplicateValues = [];
+
+
+            keyColumns.forEach((keyCol) => {
+
+                const keyValue = row[keyCol];
+
+                if (
+                    keyValue !== null &&
+                    keyValue !== undefined &&
+                    String(keyValue).trim() !== ""
+                ) {
+                    duplicateConditions.push(
+                        `\`${keyCol}\` = ?`
+                    );
+
+                    duplicateValues.push(keyValue);
+                }
             });
 
-            // Build dynamic insert query
-            const sql = `
-      INSERT INTO \`${mainTable}\`
-      (${insertCols.map((c) => `\`${c}\``).join(", ")})
-      VALUES (${insertVals.map(() => "?").join(", ")})
-    `;
 
-            await pool.query(sql, insertVals);
-
-            // Mark staging row as completed
-    //         await pool.query(
-    //             `
-    //   UPDATE \`${staging_table}\`
-    //   SET import_status = 'completed'
-    //   WHERE batch_id = ? AND row_number = ?
-    //   `,
-    //             [batchId, row.row_number],
-    //         );
-
-    const updateSql = `
-UPDATE \`${staging_table}\`
-SET \`import_status\` = 'completed'
-WHERE \`batch_id\` = ? AND \`row_number\` = ?
-`;
-
-await pool.query(updateSql, [batchId, row.row_number]);
+            if (duplicateConditions.length === 0) {
+                continue;
+            }
 
 
+            const duplicateSql = `
+                SELECT *
+                FROM \`${mainTable}\`
+                WHERE ${duplicateConditions.join(" OR ")}
+                LIMIT 1
+            `;
 
-            successCount++;
-        } 
-    //     catch (err) {
-    //         console.error(err);
 
-    //         let errMessage = err.message;
+            const [duplicateRows] = await pool.query(
+                duplicateSql,
+                duplicateValues
+            );
 
-    //         // Duplicate entry error
-    //         if (err.code === "ER_DUP_ENTRY") {
-    //             errMessage = "Duplicate record found";
-    //         }
 
-    //         errorDetails.push(`Line ${row.row_number}: Failed. (${errMessage})`);
+            // Duplicate found
+            if (duplicateRows.length > 0) {
 
-    //         // Mark staging row as failed
-    //         await pool.query(
-    //             `
-    //   UPDATE \`${staging_table}\`
-    //   SET
-    //     import_status = 'failed',
-    //     validation_error = ?
-    //   WHERE batch_id = ? AND row_number = ?
-    //   `,
-    //             [errMessage, batchId, row.row_number],
-    //         );
-    //     }
-     catch (err) {
+                hasDuplicate = true;
 
-    console.error(err);
+                const existingRow = duplicateRows[0];
 
-    let errMessage = err.message;
+                const duplicateFields = [];
 
-    if (err.code === "ER_DUP_ENTRY") {
+                for (const keyCol of keyColumns) {
 
-        const match = err.sqlMessage?.match(
-            /Duplicate entry '(.+?)' for key/
+                    if (
+                        row[keyCol] !== null &&
+                        row[keyCol] !== undefined &&
+                        existingRow[keyCol] == row[keyCol]
+                    ) {
+                        duplicateFields.push(
+                            `${keyCol}: ${row[keyCol]}`
+                        );
+                    }
+                }
+
+
+                const errMessage =
+                    `Duplicate entry (${duplicateFields.join(", ")})`;
+
+
+                errorDetails.push(
+                    `Line ${row.row_number}: ${errMessage}`
+                );
+
+
+                // Mark duplicate row as failed
+                await pool.query(
+                    `
+                    UPDATE \`${staging_table}\`
+                    SET
+                        \`import_status\` = 'failed',
+                        \`validation_error\` = ?
+                    WHERE \`batch_id\` = ?
+                      AND \`row_number\` = ?
+                    `,
+                    [
+                        errMessage,
+                        batchId,
+                        row.row_number
+                    ]
+                );
+            }
+
+        } catch (err) {
+
+            console.error(err);
+
+            hasDuplicate = true;
+
+            const errMessage = err.message;
+
+            errorDetails.push(
+                `Line ${row.row_number}: ${errMessage}`
+            );
+
+
+            await pool.query(
+                `
+                UPDATE \`${staging_table}\`
+                SET
+                    \`import_status\` = 'failed',
+                    \`validation_error\` = ?
+                WHERE \`batch_id\` = ?
+                  AND \`row_number\` = ?
+                `,
+                [
+                    errMessage,
+                    batchId,
+                    row.row_number
+                ]
+            );
+        }
+    }
+
+
+    // ---------------------------------------------------------
+    // 3. IF ANY DUPLICATE EXISTS -> DO NOT INSERT ANYTHING
+    // ---------------------------------------------------------
+
+    if (hasDuplicate) {
+
+        console.log("Duplicate found. Import cancelled.");
+
+        // Optional:
+        // mark remaining pending rows as not imported
+
+        await pool.query(
+            `
+            UPDATE \`${staging_table}\`
+            SET
+                \`import_status\` = 'failed',
+                \`validation_error\` = 
+                    COALESCE(
+                        \`validation_error\`,
+                        'Import cancelled because duplicate data was found'
+                    )
+            WHERE \`batch_id\` = ?
+              AND (
+                  \`import_status\` IS NULL
+                  OR \`import_status\` = 'pending'
+              )
+            `,
+            [batchId]
         );
 
-        const duplicateValue = match ? match[1] : "";
+    } 
+    else {
 
-        errMessage = duplicateValue
-            ? `Duplicate entry '${duplicateValue}'`
-            : "Duplicate record found";
+        // ---------------------------------------------------------
+        // 4. SECOND LOOP - INSERT DATA
+        // ---------------------------------------------------------
+
+        for (const row of stagingRows) {
+
+            try {
+
+                const insertCols = [
+                    "entity",
+                    "user"
+                ];
+
+                const insertVals = [
+                    row.entity,
+                    row.user
+                ];
+
+
+                fields.forEach((fld) => {
+
+                    const colName = `c${fld}`;
+
+                    insertCols.push(colName);
+                    insertVals.push(row[colName]);
+                });
+
+
+                const insertSql = `
+                    INSERT INTO \`${mainTable}\`
+                    (
+                        ${insertCols
+                            .map(col => `\`${col}\``)
+                            .join(", ")}
+                    )
+                    VALUES (
+                        ${insertVals
+                            .map(() => "?")
+                            .join(", ")}
+                    )
+                `;
+
+
+                await pool.query(
+                    insertSql,
+                    insertVals
+                );
+
+
+                // Mark completed
+                await pool.query(
+                    `
+                    UPDATE \`${staging_table}\`
+                    SET
+                        \`import_status\` = 'completed',
+                        \`validation_error\` = NULL
+                    WHERE \`batch_id\` = ?
+                      AND \`row_number\` = ?
+                    `,
+                    [
+                        batchId,
+                        row.row_number
+                    ]
+                );
+
+
+                successCount++;
+
+            } catch (err) {
+
+                console.error(err);
+
+                let errMessage = err.message;
+
+
+                if (err.code === "ER_DUP_ENTRY") {
+
+                    const match = err.sqlMessage?.match(
+                        /Duplicate entry '(.+?)' for key/
+                    );
+
+                    const duplicateValue =
+                        match ? match[1] : "";
+
+                    errMessage = duplicateValue
+                        ? `Duplicate entry '${duplicateValue}'`
+                        : "Duplicate record found";
+                }
+
+
+                errorDetails.push(
+                    `Line ${row.row_number}: ${errMessage}`
+                );
+
+
+                await pool.query(
+                    `
+                    UPDATE \`${staging_table}\`
+                    SET
+                        \`import_status\` = 'failed',
+                        \`validation_error\` = ?
+                    WHERE \`batch_id\` = ?
+                      AND \`row_number\` = ?
+                    `,
+                    [
+                        errMessage,
+                        batchId,
+                        row.row_number
+                    ]
+                );
+            }
+        }
     }
-
-    errorDetails.push(
-        `Line ${row.row_number}: ${errMessage}`
-    );
-
-    await pool.query(
-        `
-        UPDATE \`${staging_table}\`
-        SET
-            \`import_status\` = 'failed',
-            \`validation_error\` = ?
-        WHERE \`batch_id\` = ?
-          AND \`row_number\` = ?
-        `,
-        [
-            errMessage,
-            batchId,
-            row.row_number
-        ]
-    );
-}
-    }
-
-    // ---------------------------
-    // 8. FINAL RESPONSE
-    // ---------------------------
-
-    // if (errorDetails.length > 0) {
-    //     await pool.query(
-    //         "UPDATE report_jobs SET status='failed',error=?, notification_status='unread' WHERE id=?",
-    //         [
-    //             errorDetails.join("\n"),
-    //             jobId
-    //         ],
-    //     );
-    //     return {
-    //         code: "partial_success",
-    //         message: `${successCount} rows imported, ${errorDetails.length} failed.`,
-    //         errors: errorDetails,
-    //     };
-    // }
     if (errorDetails.length > 0) {
 
         const errorMessage = errorDetails.join("\n");
@@ -834,100 +966,6 @@ await pool.query(updateSql, [batchId, row.row_number]);
         };
     }
 };
-
-// function applyRule(rule, value, message) {
-//     switch (rule) {
-//         case "upperCase":
-//             return {
-//                 status: true,
-//                 value: String(value).toUpperCase()
-//             };
-
-//         case "lowerCase":
-//             return {
-//                 status: true,
-//                 value: String(value).toLowerCase()
-//             };
-
-//         case "emailValidation":
-//             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-//             if (!emailRegex.test(String(value))) {
-//                 return {
-//                     status: false,
-//                     message
-//                 };
-//             }
-
-//             return {
-//                 status: true,
-//                 value
-//             };
-
-//         case "phoneValidation":
-//             const phone = String(value).replace(/[\s\-()]/g, "");
-
-//             if (!/^0\d{9}$/.test(phone)) {
-//                 return {
-//                     status: false,
-//                     message
-//                 };
-//             }
-
-//             return {
-//                 status: true,
-//                 value: phone
-//             };
-//         case "dateValidation": {
-//             let val = String(value).trim();
-
-//             // Convert ISO datetime to YYYY-MM-DD
-//             if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
-//                 val = val.split("T")[0];
-//             }
-
-//             let date = null;
-
-//             // YYYY-MM-DD
-//             if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-//                 date = new Date(val);
-//             }
-//             // YYYY/MM/DD
-//             else if (/^\d{4}\/\d{2}\/\d{2}$/.test(val)) {
-//                 const [y, m, d] = val.split("/");
-//                 date = new Date(`${y}-${m}-${d}`);
-//             }
-//             // MM/DD/YYYY or DD/MM/YYYY
-//             else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
-//                 const [a, b, c] = val.split("/").map(Number);
-
-//                 if (a > 12) {
-//                     date = new Date(c, b - 1, a);
-//                 } else {
-//                     date = new Date(c, a - 1, b);
-//                 }
-//             }
-
-//             if (date && !isNaN(date.getTime())) {
-//                 return {
-//                     status: true,
-//                     value: val
-//                 };
-//             }
-
-//             return {
-//                 status: false,
-//                 message
-//             };
-//         }
-
-//         default:
-//             return {
-//                 status: true,
-//                 value
-//             };
-//     }
-// }
 
 function applyRule(rule, value, message) {
 
@@ -980,137 +1018,108 @@ function applyRule(rule, value, message) {
             };
         }
 
-
-        // case "dateValidation": {
-        //     let val = String(value).trim();
-        //     let date = null;
-
-        //     // Convert ISO datetime to YYYY-MM-DD
-        //     if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
-        //         val = val.split("T")[0];
-        //     }
-
-
-        //     // YYYY-MM-DD
-        //     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-
-        //         date = new Date(val);
-
-        //     }
-
-        //     // YYYY/MM/DD
-        //     else if (/^\d{4}\/\d{2}\/\d{2}$/.test(val)) {
-
-        //         const [y, m, d] = val.split("/");
-        //         date = new Date(`${y}-${m}-${d}`);
-
-        //     }
-
-        //     // MM/DD/YYYY or DD/MM/YYYY
-        //     else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(val)) {
-
-        //         const [a, b, c] = val.split("/").map(Number);
-
-        //         if (a > 12) {
-        //             // DD/MM/YYYY
-        //             date = new Date(c, b - 1, a);
-        //         } else {
-        //             // MM/DD/YYYY
-        //             date = new Date(c, a - 1, b);
-        //         }
-        //     }
-
-
-        //     if (date && !isNaN(date.getTime())) {
-
-        //         return {
-        //             status: true,
-        //             value: val
-        //         };
-
-        //     }
-
-
-        //     return {
-        //         status: false,
-        //         message
-        //     };
-        // }
         case "dateValidation": {
                 
             let val = String(value).trim();
             let date = null;
                 
+            // Empty date handling
+            if (val === '') {
+                return {
+                    status: true,
+                    value: ''
+                };
+            }
+        
             // Convert ISO datetime
+            // Example: 2026-08-13T10:30:00 -> 2026-08-13
             if (/^\d{4}-\d{2}-\d{2}T/.test(val)) {
                 val = val.split("T")[0];
             }
         
+            /*
+                Supported formats:
+        
+                Y-m-d
+                Y/n/j
+                Y/m/d
+                m-d-Y
+                n-j-Y
+                m/d/Y
+                n/j/Y
+            */
         
             // YYYY-MM-DD or YYYY/MM/DD
-            let match = val.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+            let match = val.match(
+                /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/
+            );
         
             if (match) {
             
-                let year = Number(match[1]);
-                let month = Number(match[2]);
-                let day = Number(match[3]);
+                const year = Number(match[1]);
+                const month = Number(match[2]);
+                const day = Number(match[3]);
             
-                date = new Date(year, month - 1, day);
+                const tempDate = new Date(year, month - 1, day);
             
-                // Validate real date
+                // Same idea as DateTime::createFromFormat validation
                 if (
-                    date.getFullYear() !== year ||
-                    date.getMonth() !== month - 1 ||
-                    date.getDate() !== day
+                    tempDate.getFullYear() === year &&
+                    tempDate.getMonth() === month - 1 &&
+                    tempDate.getDate() === day
                 ) {
-                    date = null;
+                    date = tempDate;
                 }
             }
-        
         
             // MM-DD-YYYY or MM/DD/YYYY
             if (!date) {
             
-                match = val.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+                match = val.match(
+                    /^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/
+                );
             
                 if (match) {
                 
-                    let month = Number(match[1]);
-                    let day = Number(match[2]);
-                    let year = Number(match[3]);
+                    const month = Number(match[1]);
+                    const day = Number(match[2]);
+                    const year = Number(match[3]);
                 
-                    // Month cannot be greater than 12
+                    // Same extra PHP validation:
+                    // month cannot be greater than 12
                     if (month <= 12) {
                     
-                        date = new Date(year, month - 1, day);
+                        const tempDate = new Date(year, month - 1, day);
                     
-                        // Validate real date
                         if (
-                            date.getFullYear() !== year ||
-                            date.getMonth() !== month - 1 ||
-                            date.getDate() !== day
+                            tempDate.getFullYear() === year &&
+                            tempDate.getMonth() === month - 1 &&
+                            tempDate.getDate() === day
                         ) {
-                            date = null;
+                            date = tempDate;
                         }
                     }
                 }
             }
         
-        
-            if (date && !isNaN(date.getTime())) {
-            
+            // Invalid date
+            if (!date || isNaN(date.getTime())) {
                 return {
-                    status: true,
-                    value: date.toISOString().split("T")[0]
+                    status: false,
+                    message:
+                        message ||
+                        `Invalid date '${val}'. Please use YYYY-MM-DD, YYYY/MM/DD, MM-DD-YYYY or MM/DD/YYYY.`
                 };
-            
             }
         
+            // Convert to YYYY-MM-DD
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
         
             return {
-                status: false,
-                message
+                status: true,
+                value: `${year}-${month}-${day}`
             };
         }
 

@@ -11,6 +11,7 @@ const handlers = {
   transactions: require("./handlers/transactions"),
   payroll: require("./handlers/payroll"),
   csv_upload: require("./handlers/csv_upload"),
+  bulk_pay_slips_upload : require("./handlers/bulk_pay_slips_upload"),
   //   cleanup: require("./handlers/cleanup"),
 };
 
