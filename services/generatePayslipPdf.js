@@ -2,14 +2,9 @@ const puppeteer = require("puppeteer");
 
 function formatAmount(value) {
   const num = Number(value ?? 0);
-
   if (num < 0) {
-    return `(${Math.abs(num).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })})`;
+    return `(${Math.abs(num).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
   }
-
   return num.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -102,7 +97,7 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
 
   const stampDutyRaw = numberValue(row.stamp_duty);
   const stampDuty = formatAmount(stampDutyRaw);
-  const stampDutyCurrency = formatAmount(stampDutyRaw * currencyRate);
+  const stampDutyCurrency = formatAmount(row.cur_stamp_duty);
 
   const salaryAdvanceRaw = numberValue(row.salary_advance);
   const salaryAdvance = formatAmount(salaryAdvanceRaw);
@@ -113,12 +108,9 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
   const totalDeductionCurrency = formatAmount(
     numberValue(row.total_deduction) * currencyRate,
   );
-
   const netSalary = formatAmount(row.take_home_amount);
 
-  const netSalaryCurrency = formatAmount(
-    numberValue(row.take_home_amount) * currencyRate,
-  );
+  const netSalaryCurrency = formatAmount(numberValue(row.CUR_NET_SALARRY));
 
   const totalEPF = formatAmount(row.pf_liable_total_earning);
 
@@ -161,9 +153,7 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
         <div class="salary-row">
           <span>${escapeHtml(deduction.description)}</span>
           <span>${formatAmount(deduction.amount)}</span>
-          <span>${formatAmount(
-            numberValue(deduction.amount) * currencyRate,
-          )}</span>
+          <span>${formatAmount(numberValue(deduction.currency_amount))}</span>
         </div>
       `;
     })
@@ -186,7 +176,7 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
 }
 
 body {
-    font-size: 10px;
+    font-size: 12px;
     font-family: Arial, sans-serif;
     background: #f5f5f5;
     margin: 0;
@@ -204,19 +194,20 @@ body {
 }
 
 .company-name {
-    font-size: 28px;
+    font-size: 24px;
     font-weight: bold;
 }
 
-.company-address {
-    font-size: 14px;
-    margin: 3px 0;
-}
+// .company-address {
+//     font-size: 14px;
+//     margin: 3px 0;
+// }
 
 .pay-title {
     text-align: center;
     margin: 30px 0;
-    font-size: 26px;
+    font-size: 22px;
+    font-weight:300;
 }
 
 .employee-section {
@@ -248,7 +239,7 @@ body {
 }
 
 .section-title {
-    font-size: 18px;
+    font-size: 16px;
     font-weight: bold;
     text-decoration: underline;
     letter-spacing: 3px;
@@ -307,7 +298,6 @@ body {
 
 .bank-full {
     width: 100%;
-    margin-bottom: 15px;
 }
 
 .bank-left,
@@ -364,11 +354,6 @@ body {
     <div class="rowlol">
       <div class="label">DESIGNATION</div>
       <div class="value">${escapeHtml(row.designation)}</div>
-    </div>
-
-    <div class="rowlol">
-      <div class="label">DEPARTMENT</div>
-      <div class="value">${escapeHtml(row.department)}</div>
     </div>
 
   </div>

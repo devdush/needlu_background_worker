@@ -9,7 +9,7 @@ const s3 = new S3Client({
   region: "ap-south-1",
 });
 
-const BUCKET = process.env.S3_BUCKET;
+const BUCKET ="needlu-click-assets-881490106741";
 
 module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
   const taskStartTime = Date.now();
@@ -126,7 +126,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
         h.c1802 AS branch_name,
 
         h.c1804 AS epf_no,
-        h.c4198 AS epf_liable_total_earning,
+        h.c4198 AS pf_liable_total_earning,
         h.c1017 AS epf_employer_contribution_12,
         h.c1018 AS etf_employer_contribution_3,
         h.c4330 AS total_epf_contribution,
@@ -162,7 +162,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
         h.c4297 AS cur_total_deduction,
         h.c4298 AS cur_epf_employer_contribution_12,
         h.c4299 AS cur_etf_employer_contribution_3,
-
+        ((h.c4707+h.c1011)*h.c4284)-h.c4297 AS CUR_NET_SALARRY,
         /* Allowance details */
         COALESCE(
           (
@@ -170,7 +170,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
               JSON_OBJECT(
                 'description', a.c1919,
                 'calculate_prorate_amount', a.c4414,
-                'currency_amount', a.c5323
+                'currency_amount', a.c5323  
               )
             )
             FROM portcitybpo.t347 a
@@ -404,8 +404,14 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
 
     console.log(`Successfully generated and uploaded ${successCount} payslips`);
     if (failedCount <= 0) {
-      const reportJobsUpdateQuery = `UPDATE report_jobs SET status='completed', updated_at = NOW() WHERE id = ?`;
-      const updateResult = await pool.query(reportJobsUpdateQuery, [jobId]);
+      const updatedTime = getDateTime();
+      const reportJobsUpdateQuery = `UPDATE report_jobs SET status='completed', updated_at = ?, s3_key = ? WHERE id = ?`;
+      const updateResult = await pool.query(reportJobsUpdateQuery, [
+        updatedTime,
+        logS3Key,
+        jobId,
+
+      ]);
       if (updateResult[0].affectedRows === 0) {
         await writeLog(
           `Failed to mark job ${jobId} as completed in report_jobs table`,
