@@ -9,7 +9,7 @@ const s3 = new S3Client({
   region: "ap-south-1",
 });
 
-const BUCKET ="needlu-click-assets-881490106741";
+const BUCKET = process.env.S3_BUCKET;
 
 module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
   const taskStartTime = Date.now();
@@ -405,6 +405,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
     console.log(`Successfully generated and uploaded ${successCount} payslips`);
     if (failedCount <= 0) {
       const updatedTime = getDateTime();
+      console.log(`updated Time: ${updatedTime}`);
       const reportJobsUpdateQuery = `UPDATE report_jobs SET status='completed', updated_at = ?, s3_key = ? WHERE id = ?`;
       const updateResult = await pool.query(reportJobsUpdateQuery, [
         updatedTime,
