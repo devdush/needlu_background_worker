@@ -19,13 +19,19 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
   function getDateTime() {
     const now = new Date();
 
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
+    const sriLankaTime = new Date(
+      now.toLocaleString("en-US", {
+        timeZone: "Asia/Colombo",
+      }),
+    );
 
-    const hours = String(now.getHours()).padStart(2, "0");
-    const minutes = String(now.getMinutes()).padStart(2, "0");
-    const seconds = String(now.getSeconds()).padStart(2, "0");
+    const year = sriLankaTime.getFullYear();
+    const month = String(sriLankaTime.getMonth() + 1).padStart(2, "0");
+    const day = String(sriLankaTime.getDate()).padStart(2, "0");
+
+    const hours = String(sriLankaTime.getHours()).padStart(2, "0");
+    const minutes = String(sriLankaTime.getMinutes()).padStart(2, "0");
+    const seconds = String(sriLankaTime.getSeconds()).padStart(2, "0");
 
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
@@ -110,7 +116,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
         h.c1002 AS department,
         h.c1003 AS designation,
         h.c4220 AS currency,
-        h.c1011 AS gross_salary,
+        (c4707 + c1011) AS gross_salary,
         h.c1016 AS net_payable_salary,
         h.c4590 AS lump_sum_total,
         h.c4707 AS total_arrears,
@@ -204,9 +210,13 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
       WHERE h.c998 = ?
         AND h.entity = ?
     `;
-
     const [data] = await pool.query(query, [params.month, params.entity]);
-
+    const [entityData] = await pool.query(
+      "SELECT displayName AS name FROM portcitybpo.entity WHERE entity_name = ?",
+      [params.entity],
+    );
+    const entityDisplay = entityData[0]?.name ?? params.entity;
+    
     await writeLog(`Database query completed. Records found: ${data.length}`);
 
     function sanitizeS3Part(value) {
@@ -293,7 +303,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
 
         await writeLog(`Generating PDF: ${filename}`);
 
-        await generatePayslipPdf(row, filepath, params.entity);
+        await generatePayslipPdf(row, filepath, entityDisplay);
 
         await writeLog(`PDF generated successfully: ${filepath}`);
 
@@ -403,28 +413,27 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
     console.log(`Task log uploaded successfully: ${logS3Key}`);
 
     console.log(`Successfully generated and uploaded ${successCount} payslips`);
-    if (failedCount <= 0) {
-      const updatedTime = getDateTime();
-      console.log(`updated Time: ${updatedTime}`);
-      const reportJobsUpdateQuery = `UPDATE report_jobs SET status='completed', updated_at = ?, s3_key = ? WHERE id = ?`;
-      const updateResult = await pool.query(reportJobsUpdateQuery, [
-        updatedTime,
-        logS3Key,
-        jobId,
-
-      ]);
-      if (updateResult[0].affectedRows === 0) {
-        await writeLog(
-          `Failed to mark job ${jobId} as completed in report_jobs table`,
-          "ERROR",
-        );
-      } else {
-        await writeLog(
-          `Job ${jobId} marked as completed in report_jobs table`,
-          "INFO",
-        );
-      }
+    // if (failedCount <= 0) {
+    const updatedTime = getDateTime();
+    console.log(`updated Time: ${updatedTime}`);
+    const reportJobsUpdateQuery = `UPDATE report_jobs SET status='completed', updated_at = ?, s3_key = ? WHERE id = ?`;
+    const updateResult = await pool.query(reportJobsUpdateQuery, [
+      updatedTime,
+      logS3Key,
+      jobId,
+    ]);
+    if (updateResult[0].affectedRows === 0) {
+      await writeLog(
+        `Failed to mark job ${jobId} as completed in report_jobs table`,
+        "ERROR",
+      );
+    } else {
+      await writeLog(
+        `Job ${jobId} marked as completed in report_jobs table`,
+        "INFO",
+      );
     }
+    //}
     if (failedCount > 0) {
       await writeLog(`${failedCount} payslip(s) failed`, "ERROR");
     }
@@ -484,8 +493,8 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
     }
 
     await pool.query(
-      "UPDATE report_jobs SET status='failed', error = ? WHERE id = ?",
-      [String(err), jobId],
+      "UPDATE report_jobs SET status='failed', error = ?, updated_at = ? WHERE id = ?",
+      [String(err), getDateTime(), jobId],
     );
     if (outputDir) {
       try {

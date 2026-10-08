@@ -1,5 +1,17 @@
 const puppeteer = require("puppeteer");
+const fs = require("fs");
+const path = require("path");
+function getFontBase64(filename) {
+  const fontPath = path.join(__dirname, "..", "fonts", filename);
 
+  console.log("Loading font:", fontPath);
+
+  if (!fs.existsSync(fontPath)) {
+    throw new Error(`Font file not found: ${fontPath}`);
+  }
+
+  return fs.readFileSync(fontPath).toString("base64");
+}
 function formatAmount(value) {
   const num = Number(value ?? 0);
   if (num < 0) {
@@ -57,6 +69,9 @@ function getMonthName(month) {
 }
 
 function createPayslipHtml(row, entityDisplay = row.entity) {
+  const arialRegular = getFontBase64("arial.ttf");
+  const arialBold = getFontBase64("arialbd.ttf");
+
   const monthName = getMonthName(row.month);
 
   const currencyRate = numberValue(row.currency_rate);
@@ -92,7 +107,7 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
    * of calculating the currency amount here.
    */
   const epf8Currency = formatAmount(
-    numberValue(row.epf_employee_contribution_8) * currencyRate,
+    numberValue(row.cur_epf_employee_contribution_8),
   );
 
   const stampDutyRaw = numberValue(row.stamp_duty);
@@ -105,9 +120,7 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
 
   const totalDeduction = formatAmount(row.total_deduction);
 
-  const totalDeductionCurrency = formatAmount(
-    numberValue(row.total_deduction) * currencyRate,
-  );
+  const totalDeductionCurrency = formatAmount(row.cur_total_deduction);
   const netSalary = formatAmount(row.take_home_amount);
 
   const netSalaryCurrency = formatAmount(numberValue(row.CUR_NET_SALARRY));
@@ -121,13 +134,13 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
   const epfEmployer12 = formatAmount(row.epf_employer_contribution_12);
 
   const epfEmployer12Currency = formatAmount(
-    numberValue(row.epf_employer_contribution_12) * currencyRate,
+    numberValue(row.cur_epf_employer_contribution_12),
   );
 
   const etfEmployer3 = formatAmount(row.etf_employer_contribution_3);
 
   const etfEmployer3Currency = formatAmount(
-    numberValue(row.etf_employer_contribution_3) * currencyRate,
+    numberValue(row.cur_etf_employer_contribution_3),
   );
 
   const allowances = parseJsonArray(row.allowance_details);
@@ -168,45 +181,55 @@ function createPayslipHtml(row, entityDisplay = row.entity) {
 <style>
 @page {
   size: A4;
-  margin: 12mm;
+
+}
+@font-face {
+    font-family: "ArialCustom";
+    src: url("data:font/ttf;base64,${arialRegular}") format("truetype");
+    font-weight: 400;
+    font-style: normal;
 }
 
-* {
-  box-sizing: border-box;
+@font-face {
+    font-family: "ArialCustom";
+    src: url("data:font/ttf;base64,${arialBold}") format("truetype");
+    font-weight: 1000;
+    font-style: normal;
 }
 
 body {
-    font-size: 12px;
-    font-family: Arial, sans-serif;
-    background: #f5f5f5;
+    // font-size: 12px;
+    font-family: "ArialCustom", Arial, sans-serif;
+    background: #fff;
     margin: 0;
     padding: 20px;
 }
-.payslip-container {
-    width: 850px;
-    margin: auto;
-    background: #fff;
-    padding: 30px;
-}
+  .payslip-container {
+      width: 850px;
+      margin: auto;
+      background: #fff;
+      padding: 30px;
+  }
 
 .company-header {
     text-align: center;
 }
 
 .company-name {
-    font-size: 24px;
+    font-size: 28px;
     font-weight: bold;
+    letter-spacing:-1px;
 }
 
-// .company-address {
-//     font-size: 14px;
-//     margin: 3px 0;
-// }
+.company-address {
+    font-size: 14px;
+    margin: 3px 0;
+}
 
 .pay-title {
     text-align: center;
     margin: 30px 0;
-    font-size: 22px;
+    font-size: 26px;
     font-weight:300;
 }
 
@@ -309,7 +332,7 @@ body {
 </head>
 
 <body>
-
+<div id="resultArea" class='payslip-container'>
 <div class="company-header">
   <h2 class="company-name">
     PORT CITY BPO (PVT) LTD
@@ -332,17 +355,17 @@ body {
 
   <div class="employee-left">
 
-    <p>
-      <span class="label">EMPLOYEE NO</span>
-      <span class="value">${escapeHtml(row.employee_id)}</span>
-    </p>
+    <div class="rowlol">
+      <div class="label">EMPLOYEE NO</div>
+      <div class="value">${escapeHtml(row.employee_id)}</div>
+    </div>
 
-    <p>
-      <span class="label">NAME</span>
-      <span class="value">${escapeHtml(row.employee_name)}</span>
-    </p>
+    <div class="rowlol">
+      <div class="label">NAME</div>
+      <div class="value">${escapeHtml(row.employee_name)}</div>
+    </div>
 
-  </div>
+</div>
 
   <div class="employee-right">
 
@@ -365,13 +388,13 @@ body {
 
 <div class="salary-section">
 
-  <h3 class="section-title">EARNINGS</h3>
+<h3 class="section-title">EARNINGS</h3>
+<div class="salary-row header-row">
+  <span></span>
+  <span>USD</span>
+  <span>LKR</span>
+</div>
 
-  <div class="salary-row header-row">
-    <span></span>
-    <span>USD</span>
-    <span>LKR</span>
-  </div>
 
   <div class="salary-row">
     <span>Basic Salary</span>
@@ -595,7 +618,7 @@ body {
   </div>
 
 </div>
-
+</div>
 </body>
 </html>
 `;
@@ -618,16 +641,19 @@ async function generatePayslipPdf(row, outputPath, entityDisplay) {
     await page.setContent(html, {
       waitUntil: "networkidle0",
     });
-
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+    });
     await page.pdf({
       path: outputPath,
       format: "A4",
       printBackground: true,
+      scale: 0.65,
       margin: {
         top: "10mm",
-        right: "10mm",
+        right: "20mm",
         bottom: "10mm",
-        left: "10mm",
+        left: "20mm",
       },
     });
   } finally {

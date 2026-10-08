@@ -2,11 +2,10 @@ require("dotenv").config();
 
 module.exports = {
   apps: [
-
     {
       name: "worker-csv-upload",
       script: "./Main.js",
-      cwd: "/home/ec2-user/background_worker",
+      cwd: __dirname,
 
       instances: 3,
       exec_mode: "fork",
@@ -22,7 +21,7 @@ module.exports = {
     {
       name: "worker-bulk-pay-slips",
       script: "./Main.js",
-      cwd: "/home/ec2-user/background_worker",
+      cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
 

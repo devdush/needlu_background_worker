@@ -15,7 +15,6 @@ const handlers = {
   payroll: require("./handlers/payroll"),
   csv_upload: require("./handlers/csv_upload"),
   bulk_pay_slips_upload: require("./handlers/bulk_pay_slips_upload"),
-  test_worker: require("./handlers/test_handler"),
 };
 
 const WORKER_TYPE = process.env.WORKER_TYPE;
@@ -40,7 +39,25 @@ if (!handlers[WORKER_TYPE]) {
 const sqs = new SQSClient({
   region: AWS_REGION,
 });
+function getDateTime() {
+  const now = new Date();
 
+  const sriLankaTime = new Date(
+    now.toLocaleString("en-US", {
+      timeZone: "Asia/Colombo",
+    }),
+  );
+
+  const year = sriLankaTime.getFullYear();
+  const month = String(sriLankaTime.getMonth() + 1).padStart(2, "0");
+  const day = String(sriLankaTime.getDate()).padStart(2, "0");
+
+  const hours = String(sriLankaTime.getHours()).padStart(2, "0");
+  const minutes = String(sriLankaTime.getMinutes()).padStart(2, "0");
+  const seconds = String(sriLankaTime.getSeconds()).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
 async function processMessage(message) {
   let body;
   let pool;
@@ -55,7 +72,8 @@ async function processMessage(message) {
     }
 
     const dbInfo = body.db;
-
+    const token = body.token;
+    const env111 = body.env;
     if (!dbInfo) {
       throw new Error("Database information is missing");
     }
@@ -86,19 +104,28 @@ async function processMessage(message) {
       waitForConnections: true,
       connectionLimit: 3,
     });
+    console.log(
+      `🔗 Connected to database ${dbInfo.database} at ${dbInfo.host}`,
+    );
 
     console.log(`🔄 Starting job ${body.job_id}`);
-
+    const currentTime = getDateTime();
     await pool.query(
       `
     UPDATE report_jobs
-    SET status = 'processing'
+    SET status = 'processing', updated_at = ?
     WHERE id = ?
   `,
-      [body.job_id],
+      [currentTime, body.job_id],
     );
 
-    await handlers[WORKER_TYPE](body.job_id, pool);
+    await handlers[WORKER_TYPE](
+      body.job_id,
+      pool,
+      token,
+      dbInfo.database,
+      env111,
+    );
 
     await sqs.send(
       new DeleteMessageCommand({
@@ -118,10 +145,11 @@ async function processMessage(message) {
           `
         UPDATE report_jobs
         SET status = 'failed',
-            error = ?
+            error = ?,
+            updated_at = ?
         WHERE id = ?
       `,
-          [String(err.message || err), body.job_id],
+          [String(err.message || err), getDateTime(), body.job_id],
         );
       } catch (dbErr) {
         console.error("❌ Failed to update job status:", dbErr);
@@ -153,7 +181,6 @@ async function run() {
           QueueUrl: QUEUE_URL,
           MaxNumberOfMessages: 1,
           WaitTimeSeconds: 20,
-          VisibilityTimeout: 300,
         }),
       );
 
