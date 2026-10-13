@@ -639,8 +639,10 @@ async function generatePayslipPdf(row, outputPath, entityDisplay) {
     const html = createPayslipHtml(row, entityDisplay);
 
     await page.setContent(html, {
-      waitUntil: "networkidle0",
+      waitUntil: "load",
+      timeout: 120000,
     });
+
     await page.evaluate(async () => {
       await document.fonts.ready;
     });
