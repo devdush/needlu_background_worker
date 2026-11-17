@@ -1,6 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
+
 function getFontBase64(filename) {
   const fontPath = path.join(__dirname, "..", "fonts", filename);
 
@@ -12,6 +13,25 @@ function getFontBase64(filename) {
 
   return fs.readFileSync(fontPath).toString("base64");
 }
+
+// Cache fonts once per Node.js process
+let cachedFonts = null;
+
+function getCachedFonts() {
+  if (!cachedFonts) {
+    console.log("Loading payslip fonts into memory...");
+
+    cachedFonts = {
+      regular: getFontBase64("arial.ttf"),
+      bold: getFontBase64("arialbd.ttf"),
+    };
+
+    console.log("Payslip fonts cached successfully");
+  }
+
+  return cachedFonts;
+}
+
 function formatAmount(value) {
   const num = Number(value ?? 0);
   if (num < 0) {
@@ -69,8 +89,10 @@ function getMonthName(month) {
 }
 
 function createPayslipHtml(row, entityDisplay = row.entity) {
-  const arialRegular = getFontBase64("arial.ttf");
-  const arialBold = getFontBase64("arialbd.ttf");
+  const fonts = getCachedFonts();
+
+  const arialRegular = fonts.regular;
+  const arialBold = fonts.bold;
 
   const monthName = getMonthName(row.month);
 
@@ -623,18 +645,20 @@ body {
 </html>
 `;
 }
-
-async function generatePayslipPdf(row, outputPath, entityDisplay) {
-  const browser = await puppeteer.launch({
+async function launchPayslipBrowser() {
+  return puppeteer.launch({
     // executablePath:
     //   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
 
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
+}
+async function generatePayslipPdf(row, outputPath, entityDisplay, browser) {
+  let page;
 
   try {
-    const page = await browser.newPage();
+    page = await browser.newPage();
 
     const html = createPayslipHtml(row, entityDisplay);
 
@@ -646,6 +670,7 @@ async function generatePayslipPdf(row, outputPath, entityDisplay) {
     await page.evaluate(async () => {
       await document.fonts.ready;
     });
+
     await page.pdf({
       path: outputPath,
       format: "A4",
@@ -659,11 +684,14 @@ async function generatePayslipPdf(row, outputPath, entityDisplay) {
       },
     });
   } finally {
-    await browser.close();
+    if (page) {
+      await page.close();
+    }
   }
 }
 
 module.exports = {
   createPayslipHtml,
+  launchPayslipBrowser,
   generatePayslipPdf,
 };

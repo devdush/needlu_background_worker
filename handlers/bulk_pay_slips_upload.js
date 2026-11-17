@@ -1,7 +1,11 @@
 const fs = require("fs/promises");
 const path = require("path");
+const fsSync = require("fs");
 const os = require("os");
-const { generatePayslipPdf } = require("../services/generatePayslipPdf");
+const {
+  launchPayslipBrowser,
+  generatePayslipPdf,
+} = require("../services/generatePayslipPdf");
 
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
@@ -13,7 +17,7 @@ const BUCKET = process.env.S3_BUCKET;
 
 module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
   const taskStartTime = Date.now();
-
+  let browser = null;
   let outputDir = null;
   let logFilePath = null;
   function getDateTime() {
@@ -216,7 +220,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
       [params.entity],
     );
     const entityDisplay = entityData[0]?.name ?? params.entity;
-    
+
     await writeLog(`Database query completed. Records found: ${data.length}`);
 
     function sanitizeS3Part(value) {
@@ -240,16 +244,21 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
         `customers/${clientId}/pay_slips/` +
         `${safeEntity}/${month}/${safeEmployeeId}.pdf`;
 
-      const fileBuffer = await fs.readFile(filepath);
+      const fileStream = fsSync.createReadStream(filepath);
 
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-          Body: fileBuffer,
-          ContentType: "application/pdf",
-        }),
-      );
+      try {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: BUCKET,
+            Key: key,
+            Body: fileStream,
+            ContentType: "application/pdf",
+          }),
+        );
+      } catch (error) {
+        fileStream.destroy();
+        throw error;
+      }
 
       return key;
     }
@@ -282,7 +291,9 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
 
     let successCount = 0;
     let failedCount = 0;
+    browser = await launchPayslipBrowser();
 
+    await writeLog("Puppeteer browser launched successfully");
     for (const row of data) {
       const employeeId = row.employee_id;
 
@@ -303,7 +314,7 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
 
         await writeLog(`Generating PDF: ${filename}`);
 
-        await generatePayslipPdf(row, filepath, entityDisplay);
+        await generatePayslipPdf(row, filepath, entityDisplay, browser);
 
         await writeLog(`PDF generated successfully: ${filepath}`);
 
@@ -508,5 +519,14 @@ module.exports = async function handleBulkPaySlipsUpload(jobId, pool) {
     }
 
     return false;
+  } finally {
+    if (browser) {
+      try {
+        await browser.close();
+        console.log("Puppeteer browser closed");
+      } catch (browserError) {
+        console.error("Failed to close Puppeteer browser:", browserError);
+      }
+    }
   }
 };
